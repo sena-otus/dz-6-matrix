@@ -1,4 +1,6 @@
 #include "matrix.h"
+#include <cassert>
+#include <iostream>
 #include <ostream>
 
   // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
@@ -6,7 +8,8 @@
 int main(int, char const *[])
 {
     // бесконечная матрица int заполнена значениями -1
-  Matrix<int, -1> matrix;
+  using MatrixOne = Matrix<int, -1>;
+  MatrixOne matrix;
   assert(matrix.size() == 0); // все ячейки свободны
   auto a = matrix(0, 0);
   assert(a == -1);
@@ -16,14 +19,14 @@ int main(int, char const *[])
   assert(matrix.size() == 1);
 // выведется одна строка
 // 100100314
-  for(auto && c: matrix)
+    // for(auto c: matrix)
+  for(auto c : matrix)
   {
-    // int x;
-    // int y;
-    // int v;
-//    std::tie(x, y, v) = c;
-//    std::cout << x << y << v << std::endl;
-    std::cout << c.first << ": "  << c.second << std::endl;
+    int x = 0;
+    int y = 0;
+    int v;
+    std::tie(x, y, v) = c;
+    std::cout << x << y << v << std::endl;
   }
   return 0;
 }
