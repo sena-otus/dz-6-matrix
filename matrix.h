@@ -2,7 +2,6 @@
 
 #include <map>
 #include <limits>
-//#include <boost/multiprecision/cpp_int.hpp>
 #include <tuple>
 
 
@@ -18,31 +17,73 @@ class Matrix
 public:
     /** Тип значения, хранящегося в массиве */
   using val_t = T;
+
     /** Тип используемый как индекс массива */
   using idx_t = int;
-    /** Тип используемый как ключ в мапе, он хранит произведение idx_t * idx_t
-     *  Чтобы использовать полный диапазон idx_t, sizeof(mul_t) должен
-     *  быть равен 2*sizeof(idx_t). Можно использовать, например
-     *  boost::multiprecision::uint128_t
-     *  */
-  using mul_t = long int;
-  using con_t = std::map<mul_t, T>;
 
+    /**
+     * Тип для хранения ключа-индекса в мапе
+     * */
+  struct Idx
+  {
+    auto operator<=>(const Idx& other) const noexcept {
+      if (auto cmp = i <=> other.i; cmp != 0)
+        return cmp;
+      return j <=> other.j;
+    }
+
+    bool operator==(const Idx& other) const = default;
+
+    idx_t i; ///<! строка
+    idx_t j; ///<! столбец
+  };
+
+    /** Тип мапы хранящей разреженную матрицу */
+  using con_t = std::map<Idx, T>;
+
+
+    /**
+     * @brief доступ по индексам
+     * @return прокси-объект, позволяющий осуществить вставку и удаление
+     *   из разреженной матрицы, а также возврат значения по-умлочанию
+     * */
   proxy_obj<T, defval> operator()(idx_t i, idx_t j)
   {
-    return proxy_obj<T,defval>(*this, i, j);
+    return proxy_obj<T,defval>(*this, Idx{i, j});
   }
 
+    /** количество заполненных элементов */
   std::size_t size() const { return m_array.size(); }
 
-  void set(idx_t i, idx_t j, T val) noexcept
+    /**
+     * @brief установить значение.
+     * Если значение равно значению по-умолчанию, элемент из по индексу
+     * удалится. Если элемента по индексу нет, он добавляется.
+     * @Idx индекс
+     * @val значение
+     * */
+  void set(const Idx &idx, T val) noexcept
   {
-    m_array[key(i, j)] = val;
+    if(val == defval)
+    {
+      auto it = m_array.find(idx);
+      if(it != m_array.end()) m_array.erase(it);
+    }
+    else
+    {
+      m_array[idx] = val;
+    }
   }
 
-  T get(idx_t i, idx_t j) const noexcept
+    /**
+     * @brief Получить значение.
+     * Если элемент по индексу отсутствует, возвращатся значение по-умолчанию.
+     * @Idx индекс
+     * @return значение
+     * */
+  T get(const Idx &idx) const noexcept
   {
-    auto vali = m_array.find(key(i, j));
+    auto vali = m_array.find(idx);
     if(vali == m_array.end()) {
       return defval;
     }
@@ -50,6 +91,7 @@ public:
   }
 
 
+    /** @brief Константаный итератор минимальная имплементация */
   class const_iterator
   {
     friend class Matrix<T, defval>;
@@ -59,12 +101,11 @@ public:
     : m_mmit() { }
 
     explicit
-    const_iterator(const Matrix<T, defval> *m, mmap_const_iterator mmit) noexcept
-      : m_m(m), m_mmit(mmit) { }
+    const_iterator(mmap_const_iterator mmit) noexcept
+      : m_mmit(mmit) { }
 
     const_proxy_obj<T, defval> operator*() const noexcept {
-      auto [i, j] = keys(m_mmit->first);
-      return const_proxy_obj<T,defval>(*m_m, i, j);
+      return const_proxy_obj<T,defval>(m_mmit);
     }
       // const_proxy_obj<T, defval>* operator->() const noexcept{ return &m_it->m_value; }
 
@@ -87,11 +128,10 @@ public:
       { return x.m_mmit != y.m_mmit; }
 
   private:
-    const Matrix<T, defval> *m_m{nullptr};
     mmap_const_iterator m_mmit;
   };
 
-
+    /** @brief Итератор минимальная имплементация */
   class iterator
   {
     friend class Matrix<T, defval>;
@@ -102,11 +142,10 @@ public:
 
     explicit
     iterator(Matrix<T, defval> *m, mmap_iterator mmit) noexcept
-      : m_m(m), m_mmit(mmit) { }
+      : m_m{m}, m_mmit(mmit) { }
 
     proxy_obj<T, defval> operator*() const noexcept {
-      auto [i, j] = keys(m_mmit->first);
-      return proxy_obj<T,defval>(*m_m, i, j);
+      return proxy_obj<T,defval>(*m_m, Idx{m_mmit->first.i, m_mmit->first.j});
     }
       // proxy_obj<T, defval>* operator->() const noexcept{ return &m_it->m_value; }
 
@@ -130,7 +169,7 @@ public:
 
     operator const_iterator() const noexcept
     {
-      return const_iterator(m_m, m_mmit);
+      return const_iterator(m_mmit);
     }
 
   private:
@@ -139,94 +178,118 @@ public:
   };
 
   iterator begin() noexcept { return iterator(this, m_array.begin());}
-  const_iterator cbegin() const noexcept { return const_iterator(this, m_array.begin()); }
+  const_iterator cbegin() const noexcept { return const_iterator(m_array.begin()); }
   const_iterator begin() const noexcept { return cbegin(); }
   iterator end() noexcept { return iterator(this, m_array.end()); }
-  const_iterator cend() const noexcept { return const_iterator(this, m_array.end()); }
+  const_iterator cend() const noexcept { return const_iterator(m_array.end()); }
   const_iterator end() const noexcept { cend(); }
 
-  static std::pair<idx_t,idx_t> keys(const mul_t &k) noexcept
-  {
-    idx_t i = k / std::numeric_limits<idx_t>::max();
-    idx_t j = k % std::numeric_limits<idx_t>::max();
-    return {i,  j};
-  }
-
 private:
-  static mul_t key(idx_t i, idx_t j) noexcept
-  {
-    mul_t i2{i};
-    mul_t j2{j};
-    return std::numeric_limits<idx_t>::max() * i2 + j2;
-  }
-   con_t m_array;
+  con_t m_array; ///<! мапа для хранения разреженной матрицы
 };
 
 
+/**
+ * @brief Прокси-объект для специальных операций при доступе к возвращаемому по индексу объекту.
+ * Он добавляет элемент в массив, если его нет и удаляет элемент при присвоении значения по-умлочанию.
+ * Также возвращает значение по-умолчанию при отсутствии элемента.
+ * */
 template<typename T, T defval>
 class proxy_obj
 {
-  using m_t = Matrix<T, defval>;
+  using m_t   = Matrix<T, defval>;
   using idx_t = typename m_t::idx_t;
   using val_t = typename m_t::val_t;
+  using con_t = typename m_t::con_t;
+  using Idx   = typename m_t::Idx;
 public:
+  proxy_obj() = default;
 
-  proxy_obj(Matrix<T, defval>& m, idx_t i, idx_t j)
-    : m_aref(m), m_i(i), m_j(j) {}
+  explicit proxy_obj(m_t &m, const Idx &idx)
+    : m_aref(m), m_idx{idx} {};
 
   proxy_obj& operator=(const T& val) noexcept
   {
-    m_aref.set(m_i, m_j, val);
+    m_aref.set(m_idx, val);
     return *this;
   }
 
   bool operator==(const T &val) const noexcept
   {
-    return m_aref.get(m_i, m_j) == val;
+    return m_aref.get(m_idx) == val;
   }
 
-  explicit operator T() const noexcept { return m_aref.get(m_i, m_j); }
+  explicit operator T() const noexcept { return m_aref.get(m_idx); }
 
+    /** Для работы примера из задания нужны преобразования в тупл */
   template<typename T1, typename T2, typename T3>
   operator std::tuple<T1, T2, T3>() noexcept {
-    m_v = m_aref.get(m_i, m_j);
-    return std::tuple<T1, T2, T3>(m_i, m_j, m_v);
+    m_v = m_aref.get(m_idx);
+    return std::tuple<T1, T2, T3>(m_idx.i, m_idx.j, m_v);
   }
+
+    /** Для работы примера из задания нужны преобразования в тупл */
+  template<typename T1, typename T2, typename T3>
+  operator std::tuple<T1&, T2&, T3&>() noexcept {
+    m_v = m_aref.get(m_idx);
+    return std::tuple<T1&, T2&, T3&>(m_idx.i, m_idx.j, m_v);
+  }
+
+    /** Для работы примера из задания нужны преобразования в тупл */
+  template<typename T1, typename T2, typename T3>
+  operator std::tuple<const T1&, const T2&, const T3&>() const noexcept {
+    m_v = m_aref.get(m_idx);
+    return std::tuple<const T1&, const T2&, const T3&>(m_idx.i, m_idx.j, m_v);
+  }
+
+  Idx idx() const { return m_idx;}
+  val_t val() const { return m_aref.get(m_idx);}
+
 private:
   m_t& m_aref;
-  idx_t m_i;
-  idx_t m_j;
-  val_t m_v;
+  Idx m_idx;
+  mutable val_t m_v;
 };
 
 
+/**
+ * @brief Константный прокси-объект для доступа к возвращаемому по индексу объекту.
+ * Нужен для обеспечения совместимости с обычным прокси-объектом.
+ * */
 template<typename T, T defval>
 class const_proxy_obj
 {
   using m_t = Matrix<T, defval>;
   using idx_t = typename m_t::idx_t;
   using val_t = typename m_t::val_t;
+  using con_t = typename m_t::con_t;
 public:
+  const_proxy_obj() = default;
 
-  const_proxy_obj(const Matrix<T, defval>& m, idx_t i, idx_t j)
-    : m_aref(m), m_i(i), m_j(j) {}
+    /** Константный прокси объект может быть использован только для
+     * доступа на чтение. Он никогда не добавляет значений в мартицу.
+     * @param mmit итератор никогда не должен указывать на end()
+     * */
+  explicit
+  const_proxy_obj(typename con_t::const_iterator mmit)
+    : m_mmit(mmit) { }
 
   bool operator==(const T &val) const noexcept
   {
-    return m_aref.get(m_i, m_j) == val;
+    return m_mmit->second == val;
   }
 
-  explicit operator T() const noexcept { return m_aref.get(m_i, m_j); }
+  explicit operator T() const noexcept { return m_mmit->second; }
 
   template<typename T1, typename T2, typename T3>
   operator std::tuple<T1, T2, T3>() noexcept {
-    m_v = m_aref.get(m_i, m_j);
-    return std::tuple<T1, T2, T3>(m_i, m_j, m_v);
+    return std::tuple<T1, T2, T3>(m_mmit->first.i, m_mmit->first.j, m_mmit->second);
   }
 
+  template<typename T1, typename T2, typename T3>
+  operator std::tuple<const T1&, const T2&, const T3&>() noexcept {
+    return std::tuple<const T1&, const T2&, const T3&>(m_mmit->first.i, m_mmit->first.j, m_mmit->second);
+  }
 private:
-  const m_t& m_aref;
-  idx_t m_i;
-  idx_t m_j;
-  val_t m_v;
+  typename con_t::const_iterator m_mmit;
 };
