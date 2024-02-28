@@ -1,17 +1,23 @@
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <limits>
 #include <tuple>
+#include <array>
+#include <cinttypes>
 
 
-template<typename T, T defval> class proxy_obj;
-template<typename T, T defval> class const_proxy_obj;
+template<typename T, T defval, int dim = 2> class proxy_obj;
+template<typename T, T defval, int dim = 2> class const_proxy_obj;
 
 /**
- * @brief matrix class
+ * @brief разреженная матрица произвольной размерности
+ * @tparam T хранимый тип
+ * @tparam defval значение по-умлочанию
+ * @tparam dim размерность
  *  */
-template <typename T, T defval>
+template <typename T, T defval, int dim = 2>
 class Matrix
 {
 public:
@@ -27,15 +33,16 @@ public:
   struct Idx
   {
     auto operator<=>(const Idx& other) const noexcept {
-      if (auto cmp = i <=> other.i; cmp != 0)
-        return cmp;
-      return j <=> other.j;
+      for(int ii = 0; ii < (dim-1); ++ii)
+      {
+        if (auto cmp = iidx[ii] <=> other.iidx[ii]; cmp != 0) return cmp;
+      }
+      return iidx[dim-1] <=> other.iidx[dim-1];
     }
 
     bool operator==(const Idx& other) const = default;
 
-    idx_t i; ///<! строка
-    idx_t j; ///<! столбец
+    std::array<idx_t, dim> iidx;
   };
 
     /** Тип мапы хранящей разреженную матрицу */
@@ -43,14 +50,32 @@ public:
 
 
     /**
-     * @brief доступ по индексам
-     * @return прокси-объект, позволяющий осуществить вставку и удаление
+     * @brief доступ по двумерному индексу
+     * @return прокси-объект, позволяющий получить доступ к следующему
+     *   уровню размерности, осуществить вставку и удаление
      *   из разреженной матрицы, а также возврат значения по-умлочанию
      * */
-  proxy_obj<T, defval> operator()(idx_t i, idx_t j)
+  proxy_obj<T, defval, dim> operator()(idx_t i, idx_t j)
   {
-    return proxy_obj<T,defval>(*this, Idx{i, j});
+    Idx idx;
+    idx.iidx[0] = i;
+    idx.iidx[1] = j;
+    return proxy_obj<T, defval, dim>(*this, std::move(idx), 2);
   }
+
+    /**
+     * @brief доступ по одномерному индексу
+     * @return прокси-объект, позволяющий получить доступ к следующему
+     *   уровню размерности, осуществить вставку и удаление
+     *   из разреженной матрицы, а также возврат значения по-умлочанию
+     * */
+  proxy_obj<T, defval, dim> operator[](idx_t ii)
+  {
+    Idx idx;
+    idx.iidx[0] = ii;
+    return proxy_obj<T, defval, dim>(*this, std::move(idx), 1);
+  }
+
 
     /** количество заполненных элементов */
   std::size_t size() const { return m_array.size(); }
@@ -145,7 +170,7 @@ public:
       : m_m{m}, m_mmit(mmit) { }
 
     proxy_obj<T, defval> operator*() const noexcept {
-      return proxy_obj<T,defval>(*m_m, Idx{m_mmit->first.i, m_mmit->first.j});
+      return proxy_obj<T,defval>(*m_m, m_mmit->first);
     }
       // proxy_obj<T, defval>* operator->() const noexcept{ return &m_it->m_value; }
 
@@ -194,10 +219,10 @@ private:
  * Он добавляет элемент в массив, если его нет и удаляет элемент при присвоении значения по-умлочанию.
  * Также возвращает значение по-умолчанию при отсутствии элемента.
  * */
-template<typename T, T defval>
+template<typename T, T defval, int dim>
 class proxy_obj
 {
-  using m_t   = Matrix<T, defval>;
+  using m_t   = Matrix<T, defval, dim>;
   using idx_t = typename m_t::idx_t;
   using val_t = typename m_t::val_t;
   using con_t = typename m_t::con_t;
@@ -205,8 +230,24 @@ class proxy_obj
 public:
   proxy_obj() = default;
 
-  explicit proxy_obj(m_t &m, const Idx &idx)
-    : m_aref(m), m_idx{idx} {};
+
+  explicit proxy_obj(m_t &m, Idx && idx, int dimsize = dim)
+    : m_aref(m), m_idx{std::forward<Idx>(idx)}, m_dimsize(dimsize)
+  {
+  }
+
+  explicit proxy_obj(m_t &m, const Idx &idx, int dimsize = dim)
+    : m_aref(m), m_idx{idx}, m_dimsize(dimsize)
+  {
+  }
+
+
+  proxy_obj<T, defval, dim> operator[](idx_t ii)
+  {
+    m_idx.iidx[m_dimsize] = ii;
+    return proxy_obj<T, defval, dim>(m_aref, m_idx, m_dimsize+1);
+  }
+
 
   proxy_obj& operator=(const T& val) noexcept
   {
@@ -225,30 +266,32 @@ public:
   template<typename T1, typename T2, typename T3>
   operator std::tuple<T1, T2, T3>() noexcept {
     m_v = m_aref.get(m_idx);
-    return std::tuple<T1, T2, T3>(m_idx.i, m_idx.j, m_v);
+    return std::tuple<T1, T2, T3>(m_idx.iidx[0], m_idx.iidx[1], m_v);
   }
 
     /** Для работы примера из задания нужны преобразования в тупл */
   template<typename T1, typename T2, typename T3>
   operator std::tuple<T1&, T2&, T3&>() noexcept {
     m_v = m_aref.get(m_idx);
-    return std::tuple<T1&, T2&, T3&>(m_idx.i, m_idx.j, m_v);
+    return std::tuple<T1&, T2&, T3&>(m_idx.iidx[0], m_idx.iidx[1], m_v);
   }
 
     /** Для работы примера из задания нужны преобразования в тупл */
   template<typename T1, typename T2, typename T3>
   operator std::tuple<const T1&, const T2&, const T3&>() const noexcept {
     m_v = m_aref.get(m_idx);
-    return std::tuple<const T1&, const T2&, const T3&>(m_idx.i, m_idx.j, m_v);
+    return std::tuple<const T1&, const T2&, const T3&>(m_idx.iidx[0], m_idx.iidx[1], m_v);
   }
 
-  Idx idx() const { return m_idx;}
+  idx_t idx(int ii) { return m_idx.iidx[ii]; }
+  const Idx& idx() const { return m_idx;}
   val_t val() const { return m_aref.get(m_idx);}
 
 private:
   m_t& m_aref;
   Idx m_idx;
-  mutable val_t m_v;
+  int  m_dimsize{0};
+  val_t m_v{0};
 };
 
 
@@ -256,7 +299,7 @@ private:
  * @brief Константный прокси-объект для доступа к возвращаемому по индексу объекту.
  * Нужен для обеспечения совместимости с обычным прокси-объектом.
  * */
-template<typename T, T defval>
+template<typename T, T defval, int dim>
 class const_proxy_obj
 {
   using m_t = Matrix<T, defval>;
@@ -283,12 +326,12 @@ public:
 
   template<typename T1, typename T2, typename T3>
   operator std::tuple<T1, T2, T3>() noexcept {
-    return std::tuple<T1, T2, T3>(m_mmit->first.i, m_mmit->first.j, m_mmit->second);
+    return std::tuple<T1, T2, T3>(m_mmit->first.iidx[0], m_mmit->first.iidx[1], m_mmit->second);
   }
 
   template<typename T1, typename T2, typename T3>
   operator std::tuple<const T1&, const T2&, const T3&>() noexcept {
-    return std::tuple<const T1&, const T2&, const T3&>(m_mmit->first.i, m_mmit->first.j, m_mmit->second);
+    return std::tuple<const T1&, const T2&, const T3&>(m_mmit->first.iidx[0], m_mmit->first.iidx[1], m_mmit->second);
   }
 private:
   typename con_t::const_iterator m_mmit;
